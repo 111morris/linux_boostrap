@@ -1,0 +1,7 @@
+git clone https://your-repository/linux-bootstrap.git
+cd linux-bootstrap
+
+chmod +x bootstrap.sh
+
+./bootstrap.sh
+
