@@ -127,6 +127,7 @@ pkg_upgrade() {
         return 0
     fi
 
+    log_info "Upgrading system packages (${PKG_CMD})"
     case "$PKG_MANAGER" in
         apt) run "${SUDO[@]}" "$PKG_CMD" -y upgrade ;;
         dnf) run "${SUDO[@]}" "$PKG_CMD" -y upgrade ;;

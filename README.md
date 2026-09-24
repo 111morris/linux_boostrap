@@ -3,13 +3,12 @@
 Cross-distribution Linux workstation provisioning: clone the repository on a
 fresh install, run one command, get a machine that is ready for development.
 
-**Status: Stage 1 of a staged build** (see [Roadmap](#roadmap)). Stage 1
-delivers the core infrastructure: OS and package-manager detection, a
-package-name abstraction across distributions, a configuration system with
-explicit precedence, the full command-line interface, dry-run machinery and
-logging. System changes begin with Stage 2.
+**Status: Stage 2 of a staged build** (see [Roadmap](#roadmap)). Stage 2 adds
+the first component — `system`: package metadata refresh, a configurable full
+upgrade (`UPDATE_SYSTEM`), and the baseline development packages
+(`BASELINE_PACKAGES`) — all idempotent and dry-run aware.
 
-## Supported distributions (Stage 1: detection + package abstraction)
+## Supported distributions
 
 | Family  | Distributions                                      | Package manager |
 |---------|----------------------------------------------------|-----------------|
@@ -26,11 +25,12 @@ Detection reads `/etc/os-release` (including `ID_LIKE` fallback) — no
 
 ```bash
 git clone <repository>
-cd linux-bootstrap
+cd linux_bootstrap
 
 ./bootstrap.sh --list      # what would be detected/used on this machine
 ./bootstrap.sh --dry-run   # show planned actions, change nothing
-./bootstrap.sh             # run (Stage 1 validates only; installs come in Stage 2)
+./bootstrap.sh             # refresh, upgrade, install the baseline
+                           # (asks for your sudo password when needed)
 ```
 
 ## Command line
@@ -50,6 +50,33 @@ cd linux-bootstrap
 
 Unknown options/arguments exit with code `2`; runtime failures exit `1`.
 
+## Components
+
+Each component lives in `modules/<name>.sh` and implements one contract:
+
+| Function             | Purpose                                                     |
+|----------------------|-------------------------------------------------------------|
+| `<name>_enabled()`   | Return 0 when the component should run by default            |
+| `<name>_check()`     | Print the idempotency state (`installed` / `missing: ...`)   |
+| `<name>_run()`       | Do the work; stop at the first failure; honour `--dry-run`   |
+| `<name>_verify()`    | Print a confirmation; exit non-zero when the result is broken|
+
+Register the component with one line in `bootstrap.sh` (`name:tier`); the
+runner validates the contract when it loads the file. Selection precedence:
+
+```
+--modules  >  --all  >  --minimal  >  each component's *_enabled()
+```
+
+| Component | Tier      | Configuration keys                   | Status  |
+|-----------|-----------|--------------------------------------|---------|
+| system    | essential | `UPDATE_SYSTEM`, `BASELINE_PACKAGES` | shipped |
+
+The system component refreshes package metadata, runs a full upgrade when
+`UPDATE_SYSTEM=true`, and installs whatever is missing from
+`BASELINE_PACKAGES` — logical names, resolved per distribution. Re-running it
+only repeats the refresh/upgrade; the baseline step skips when complete.
+
 ## Configuration
 
 Configuration lives in `config/*.conf` and is plain shell syntax (comments
@@ -62,8 +89,9 @@ built-in defaults  <  config/*.conf files  <  environment  <  command line
 - Unknown keys in config files produce a warning (catches typos).
 - Invalid booleans abort the run with a clear error.
 
-Current files: `system.conf` (system behaviour), `software.conf` (component
-toggles); `git.conf`, `python.conf`, `node.conf` fill in with later stages.
+Current files: `system.conf` (`UPDATE_SYSTEM`, `BASELINE_PACKAGES`),
+`software.conf` (component toggles); `git.conf`, `python.conf`, `node.conf`
+fill in with later stages.
 
 ## Project layout
 
@@ -74,7 +102,7 @@ lib/                mechanism: common.sh (log/dry-run/errors), os.sh,
 packages/           data: logical-name maps per OS family (debian, rhel,
                     arch, suse, alpine); unmapped names pass through
 modules/            features: one component per file, uniform contract
-                    (enabled / check / run / verify) — filled in Stage 2+
+                    (system shipped; git/python/node/... in later stages)
 config/             user-editable configuration
 tests/              zero-dependency test runner + fixtures (no host mutation)
 ```
@@ -87,6 +115,8 @@ differences never leak into component code.
 
 - Runs as your user; `sudo` is used only for system operations.
 - `--dry-run` prints every mutating command instead of executing it.
+- A failing component is listed in the `Results` section and makes the run
+  exit `1` — failures are reported, never hidden.
 - No secrets, keys or tokens in the repository (SSH handling arrives Stage 4).
 - Log file: `~/.local/state/linux-bootstrap/bootstrap.log` (override with
   `BOOTSTRAP_STATE_DIR` / `BOOTSTRAP_LOG_FILE`).
@@ -105,8 +135,8 @@ make test     # tests/run_tests.sh — plain bash, no test framework needed
 
 | Stage | Content                                          | Status |
 |-------|--------------------------------------------------|--------|
-| 1     | Core infra: detection, pkg abstraction, config, CLI, dry-run, logging | **current** |
-| 2     | System component: metadata refresh, upgrade, baseline packages | pending |
+| 1     | Core infra: detection, pkg abstraction, config, CLI, dry-run, logging | done |
+| 2     | System component: metadata refresh, upgrade, baseline packages | **current** |
 | 3     | Complete `config/*` (git/python/node/system)      | pending |
 | 4     | Git + SSH components (non-destructive, opt-in)    | pending |
 | 5     | Python + Node runtimes (never replace system)     | pending |

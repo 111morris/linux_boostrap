@@ -2,10 +2,10 @@
 #
 # linux-bootstrap — cross-distribution Linux workstation provisioning.
 #
-# Stage 1 (current): core infrastructure — OS/package-manager detection,
-# logical package-name abstraction, configuration with explicit precedence,
-# full CLI, dry-run machinery and logging. Component modules arrive in
-# later stages (see README "Roadmap").
+# Stage 2 (current): core infrastructure (detection, package abstraction,
+# configuration, CLI, dry-run, logging) plus the first component — "system"
+# (metadata refresh, configurable upgrade, baseline development packages).
+# Later stages register more components (see README "Roadmap").
 #
 # Run:  ./bootstrap.sh --help
 
@@ -26,11 +26,16 @@ source "$SCRIPT_DIR/lib/config.sh"
 # ---------------------------------------------------------------------------
 # Component registry — entries are "name:tier".
 # Tiers: essential | runtime | optional | apps
-# Populated stage by stage; Stage 2 adds "system".
+# One line per component; loading validates that modules/<name>.sh exists and
+# defines the full contract (enabled / check / run / verify).
 # ---------------------------------------------------------------------------
-MODULE_REGISTRY=()
+MODULE_REGISTRY=(
+    'system:essential'
+)
 
 SELECTED_MODULES=()
+declare -A MODULE_LOADED=()
+declare -A MODULE_STATUS=()
 
 # ---------------------------------------------------------------------------
 # CLI
@@ -60,7 +65,7 @@ Configuration precedence:
 Examples:
   ./bootstrap.sh --dry-run
   ./bootstrap.sh --non-interactive --all
-  ./bootstrap.sh --modules system,git --skip-update
+  ./bootstrap.sh --modules system --skip-update
   ./bootstrap.sh --list
 EOF
 }
@@ -136,7 +141,7 @@ parse_args() {
 }
 
 # ---------------------------------------------------------------------------
-# Component selection (--modules > --all > --minimal > config defaults)
+# Component selection: --modules > --all > --minimal > <name>_enabled()
 # ---------------------------------------------------------------------------
 
 module_registry_names() {
@@ -150,9 +155,6 @@ compute_selection() {
     SELECTED_MODULES=()
 
     if [[ -n $MODULES_ARG ]]; then
-        if [[ ${#MODULE_REGISTRY[@]} -eq 0 ]]; then
-            usage_error "No components are registered yet (Stage 1 infrastructure only)."
-        fi
         local -a requested=()
         IFS=',' read -r -a requested <<<"$MODULES_ARG"
         local req
@@ -167,34 +169,126 @@ compute_selection() {
         return 0
     fi
 
-    local entry
+    local entry name
     case "$MODE" in
         all)
-            if [[ ${#MODULE_REGISTRY[@]} -eq 0 ]]; then
-                log_warn "--all: no components registered yet."
-            else
-                for entry in "${MODULE_REGISTRY[@]}"; do
-                    SELECTED_MODULES+=("${entry%%:*}")
-                done
-            fi
+            # Explicit flags force the selection (an explicit --all or
+            # --modules overrides the component's own config toggles).
+            for entry in "${MODULE_REGISTRY[@]}"; do
+                SELECTED_MODULES+=("${entry%%:*}")
+            done
             ;;
         minimal)
-            if [[ ${#MODULE_REGISTRY[@]} -eq 0 ]]; then
-                log_warn "--minimal: no components registered yet."
-            else
-                for entry in "${MODULE_REGISTRY[@]}"; do
-                    if [[ ${entry##*:} == essential ]]; then
-                        SELECTED_MODULES+=("${entry%%:*}")
-                    fi
-                done
-            fi
+            for entry in "${MODULE_REGISTRY[@]}"; do
+                if [[ ${entry##*:} == essential ]]; then
+                    SELECTED_MODULES+=("${entry%%:*}")
+                fi
+            done
             ;;
         *)
-            # Default mode: each component opts in through its own
-            # configuration flag when it lands (Stage 2+).
-            :
+            # Default mode: every component that enables itself through its
+            # own <name>_enabled() function (which honours config toggles).
+            for entry in "${MODULE_REGISTRY[@]}"; do
+                name=${entry%%:*}
+                if "${name}_enabled"; then
+                    SELECTED_MODULES+=("$name")
+                fi
+            done
             ;;
     esac
+}
+
+_module_selected() {
+    local s
+    for s in "${SELECTED_MODULES[@]}"; do
+        if [[ $s == "$1" ]]; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+# ---------------------------------------------------------------------------
+# Component loading and execution
+#
+# Contract: modules/<name>.sh defines <name>_enabled, <name>_check,
+# <name>_run and <name>_verify. check prints the idempotency state
+# ("installed" or "missing: ..."); run performs the work, stopping at the
+# first failure; verify prints a confirmation and fails when broken.
+# ---------------------------------------------------------------------------
+
+load_module() {
+    local name=$1
+    local file="$SCRIPT_DIR/modules/${name}.sh"
+    local suffix
+
+    if [[ -n ${MODULE_LOADED[$name]:-} ]]; then
+        return 0
+    fi
+    [[ -r $file ]] || die "Component file not found: ${file}"
+
+    # shellcheck source=/dev/null
+    source "$file"
+    for suffix in enabled check run verify; do
+        if ! declare -F "${name}_${suffix}" >/dev/null; then
+            die "Component '${name}' (${file}) does not define ${name}_${suffix}()"
+        fi
+    done
+    MODULE_LOADED[$name]=true
+}
+
+load_all_modules() {
+    local entry
+    for entry in "${MODULE_REGISTRY[@]}"; do
+        load_module "${entry%%:*}"
+    done
+}
+
+run_components() {
+    local name state detail
+
+    section_header "Components"
+
+    if [[ ${#SELECTED_MODULES[@]} -eq 0 ]]; then
+        log_info "No components selected."
+        return 0
+    fi
+
+    for name in "${SELECTED_MODULES[@]}"; do
+        MODULE_STATUS[$name]=planned
+        log_info "Component: ${name}"
+
+        # Idempotency probe — read-only. A failing probe is a warning, not
+        # an error: the run itself is idempotent.
+        if ! state=$("${name}_check"); then
+            log_warn "${name}: state check failed; continuing (operations are idempotent)"
+            state='unknown'
+        fi
+        case "$state" in
+            installed*) log_ok "${name}: ${state}" ;;
+            *) log_info "${name}: ${state}" ;;
+        esac
+
+        if ! "${name}_run"; then
+            MODULE_STATUS[$name]=failed
+            log_fail "${name}: component failed (see messages above)"
+            continue
+        fi
+
+        if is_truthy "$DRY_RUN"; then
+            MODULE_STATUS[$name]=planned
+            log_dry "${name}: verification skipped in dry run"
+            continue
+        fi
+
+        if detail=$("${name}_verify"); then
+            MODULE_STATUS[$name]=ok
+            log_ok "${name}: ${detail}"
+        else
+            MODULE_STATUS[$name]=failed
+            log_fail "${name}: ${detail}"
+        fi
+    done
 }
 
 # ---------------------------------------------------------------------------
@@ -215,14 +309,15 @@ print_list() {
     print_system_block
 
     section_header "Components"
-    if [[ ${#MODULE_REGISTRY[@]} -eq 0 ]]; then
-        printf '  (none registered yet — the "system" component arrives in Stage 2)\n'
-    else
-        local entry
-        for entry in "${MODULE_REGISTRY[@]}"; do
-            printf '  %-14s %s\n' "${entry%%:*}" "${entry##*:}"
-        done
-    fi
+    local entry cname
+    for entry in "${MODULE_REGISTRY[@]}"; do
+        cname=${entry%%:*}
+        if _module_selected "$cname"; then
+            printf '  %-12s %-9s %s\n' "$cname" "${entry##*:}" "selected"
+        else
+            printf '  %-12s %-9s %s\n' "$cname" "${entry##*:}" "not selected"
+        fi
+    done
 
     section_header "Effective configuration"
     local name
@@ -233,12 +328,6 @@ print_list() {
     section_header "Notes"
     kv_print "Precedence" "defaults < config files < environment < CLI"
     kv_print "Log file" "${LOG_FILE:-console only}"
-}
-
-print_plan() {
-    section_header "Plan (dry run)"
-    log_dry "Read-only so far: OS detection, package-manager detection, privilege check, configuration validation"
-    log_dry "No mutating actions exist yet — component actions (metadata refresh, upgrades, installs) arrive in Stage 2"
 }
 
 print_summary() {
@@ -254,6 +343,40 @@ print_summary() {
     kv_print "Components" "$sel"
     kv_print "Config" "${CONFIG_DIR:-$SCRIPT_DIR/config} ($(config_key_count) keys)"
     kv_print "Log file" "${LOG_FILE:-console only}"
+}
+
+print_results() {
+    local name status tag color
+
+    if [[ ${#SELECTED_MODULES[@]} -eq 0 ]]; then
+        return 0
+    fi
+
+    section_header "Results"
+    for name in "${SELECTED_MODULES[@]}"; do
+        status=${MODULE_STATUS[$name]:-not run}
+        case "$status" in
+            ok)
+                tag='[  OK  ]'
+                color=$C_OK
+                ;;
+            failed)
+                tag='[ FAIL ]'
+                color=$C_FAIL
+                ;;
+            planned)
+                tag='[ DRY  ]'
+                color=$C_DRY
+                status='planned (dry run)'
+                ;;
+            *)
+                tag='[ SKIP ]'
+                color=$C_SKIP
+                status='not run'
+                ;;
+        esac
+        printf '  %s%s%s %-12s %s\n' "$color" "$tag" "$C_RESET" "$name" "$status"
+    done
 }
 
 # ---------------------------------------------------------------------------
@@ -278,6 +401,8 @@ main() {
         log_info "--skip-update: UPDATE_SYSTEM=false"
     fi
 
+    log_info "Loading components (${#MODULE_REGISTRY[@]} registered)"
+    load_all_modules
     compute_selection
 
     log_info "Detecting operating system"
@@ -308,18 +433,28 @@ main() {
 
     print_system_block
 
-    if is_truthy "$DRY_RUN"; then
-        print_plan
-    elif [[ ${#SELECTED_MODULES[@]} -eq 0 ]]; then
-        log_info "Core infrastructure validated (read-only). No components registered yet — Stage 2 adds 'system'."
-    fi
+    run_components
 
     print_summary
+    print_results
+
+    local failed=0 name
+    for name in "${SELECTED_MODULES[@]}"; do
+        if [[ ${MODULE_STATUS[$name]:-} == failed ]]; then
+            failed=$((failed + 1))
+        fi
+    done
 
     if is_truthy "$DRY_RUN"; then
         log_ok "Dry run complete — no changes were made"
+    elif ((failed > 0)); then
+        log_fail "Bootstrap completed with ${failed} failed component(s)"
+        if [[ -n ${LOG_FILE:-} ]]; then
+            log_fail "See log: ${LOG_FILE}"
+        fi
+        exit 1
     else
-        log_ok "Environment validated — no system changes made yet (components arrive in Stage 2)"
+        log_ok "Bootstrap completed — all selected components verified"
     fi
 }
 

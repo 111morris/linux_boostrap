@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # tests for lib/config.sh — precedence (defaults < files < environment),
-# unknown-key warnings, boolean validation.
+# unknown-key warnings, boolean validation, BASELINE_PACKAGES.
 
 set -uo pipefail
 export NO_COLOR=1
@@ -17,8 +17,9 @@ run_config() {
         source "$1/lib/common.sh"
         source "$1/lib/config.sh"
         config_load
-        printf "RESULT update=%s docker=%s rust=%s\n" \
-            "${UPDATE_SYSTEM}" "${INSTALL_DOCKER}" "${INSTALL_RUST}"
+        printf "RESULT update=%s docker=%s rust=%s baseline=%s\n" \
+            "${UPDATE_SYSTEM}" "${INSTALL_DOCKER}" "${INSTALL_RUST}" \
+            "${BASELINE_PACKAGES}"
         printf "COUNT %s\n" "$(config_key_count)"
     ' bash "$ROOT" 2>&1
 }
@@ -29,7 +30,8 @@ test_defaults_when_config_dir_missing() {
     assert_eq "$rc" "0"
     assert_contains "$out" "[ WARN ] Configuration directory not found"
     assert_contains "$out" "RESULT update=true docker=false rust=false"
-    assert_contains "$out" "COUNT 8"
+    assert_contains "$out" "baseline=git curl wget"
+    assert_contains "$out" "COUNT 9"
 }
 
 test_config_files_override_defaults() {
@@ -45,6 +47,13 @@ test_environment_beats_config_files() {
     out=$(run_config CONFIG_DIR="$FIX/config/full" UPDATE_SYSTEM=yes) || rc=$?
     assert_eq "$rc" "0"
     assert_contains "$out" "RESULT update=true docker=true rust=false"
+}
+
+test_baseline_packages_env_override() {
+    local out rc=0
+    out=$(run_config CONFIG_DIR="$FIX/config/full" BASELINE_PACKAGES="git jq") || rc=$?
+    assert_eq "$rc" "0"
+    assert_contains "$out" "baseline=git jq"
 }
 
 test_unknown_key_warns_but_still_loads() {
@@ -73,6 +82,7 @@ t_run \
     test_defaults_when_config_dir_missing \
     test_config_files_override_defaults \
     test_environment_beats_config_files \
+    test_baseline_packages_env_override \
     test_unknown_key_warns_but_still_loads \
     test_invalid_boolean_is_fatal \
     test_invalid_environment_boolean_is_fatal

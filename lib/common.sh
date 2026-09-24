@@ -107,7 +107,15 @@ run() {
         log_dry "$*"
         return 0
     fi
-    "$@"
+
+    # Real execution: report the failing command clearly, then propagate the
+    # exit status so the caller (module) can stop at the first failure.
+    local rc=0
+    "$@" || rc=$?
+    if ((rc != 0)); then
+        log_fail "Command failed (exit ${rc}): $*"
+    fi
+    return "$rc"
 }
 
 # ---------------------------------------------------------------------------

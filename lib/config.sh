@@ -4,15 +4,20 @@
 #
 #   built-in defaults  <  config/*.conf files  <  environment  <  command line
 #
-# CONFIG_KEYS registers every known key and its type. Assignments in config
-# files that are not registered produce a warning (catches typos); invalid
-# values abort the run with a clear error. The command line layer is applied
-# by bootstrap.sh after config_load returns.
+# CONFIG_KEYS registers every known key and its type:
+#
+#   boolean  normalised to true/false; invalid values abort the run
+#   string   free-form; validated by the component that consumes it
+#
+# Assignments in config files that are not registered produce a warning
+# (catches typos). The command line layer is applied by bootstrap.sh after
+# config_load returns.
 #
 # shellcheck shell=bash
 
 CONFIG_KEYS=(
     'UPDATE_SYSTEM:boolean'
+    'BASELINE_PACKAGES:string'
     'INSTALL_DOCKER:boolean'
     'INSTALL_NEOVIM:boolean'
     'INSTALL_RUST:boolean'
@@ -82,6 +87,7 @@ config_load() {
 
     # 2. built-in defaults
     UPDATE_SYSTEM=true
+    BASELINE_PACKAGES='git curl wget ca-certificates unzip zip tar gzip xz ssh-client build-essential make cc jq tree tmux htop ripgrep fd findutils vim'
     INSTALL_DOCKER=false
     INSTALL_NEOVIM=false
     INSTALL_RUST=false
@@ -123,6 +129,8 @@ config_load() {
         name=${entry%%:*}
         kind=${entry##*:}
         value=${!name:-}
+        # boolean keys must normalise (fatal when invalid);
+        # string keys pass through unchanged to their consumer
         if [[ $kind == boolean ]]; then
             if ! norm=$(_normalize_bool "$value"); then
                 die "Invalid boolean for ${name}: '${value}' (expected true or false)"

@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 #
-# tests for bootstrap.sh — CLI parsing, exit codes, precedence, dry-run.
+# tests for bootstrap.sh — CLI parsing, exit codes, precedence, dry-run and
+# component selection. Real (non-dry) runs are covered by test_system.sh
+# against a fully mocked package layer.
 
 set -uo pipefail
 export NO_COLOR=1
@@ -56,8 +58,12 @@ test_list_shows_environment_and_config() {
     assert_contains "$out" "Package mgr"
     assert_contains "$out" "Effective configuration"
     assert_contains "$out" "$(printf '%-20s = %s' UPDATE_SYSTEM true)"
+    assert_contains "$out" "BASELINE_PACKAGES"
     assert_contains "$out" "Components"
-    assert_contains "$out" "none registered yet"
+    assert_contains "$out" "system"
+    assert_contains "$out" "essential"
+    assert_contains "$out" "selected"
+    assert_not_contains "$out" "not selected" # default mode selects system
 }
 
 test_cli_beats_environment() {
@@ -77,49 +83,53 @@ test_environment_beats_config_file() {
     assert_contains "$out" "$(printf '%-20s = %s' UPDATE_SYSTEM false)"
 }
 
-test_dry_run_prints_plan_and_changes_nothing() {
+test_dry_run_shows_plan_and_changes_nothing() {
     local out rc=0
     out=$(run_bs --dry-run) || rc=$?
     assert_eq "$rc" "0"
-    assert_contains "$out" "Plan (dry run)"
+    assert_contains "$out" "Components"
     assert_contains "$out" "[ DRY  ]"
+    assert_contains "$out" "system: verification skipped in dry run"
+    assert_contains "$out" "$(printf '  %-13s: %s' Components system)"
     assert_contains "$out" "no changes were made"
     assert_contains "$out" "[  OK  ]"
+    assert_not_contains "$out" "[ FAIL ]"
 }
 
-test_real_run_validates_without_changes() {
+test_unknown_module_exits_2() {
     local out rc=0
-    out=$(run_bs) || rc=$?
-    assert_eq "$rc" "0"
-    assert_contains "$out" "System"
-    assert_contains "$out" "Summary"
-    assert_contains "$out" "[  OK  ] Environment validated"
-}
-
-test_modules_without_registry_exits_2() {
-    local out rc=0
-    out=$(run_bs --modules system) || rc=$?
+    out=$(run_bs --modules nope) || rc=$?
     assert_eq "$rc" "2"
-    assert_contains "$out" "No components are registered yet"
+    assert_contains "$out" "Unknown component: nope (see --list)"
+    assert_contains "$out" '--help'
 }
 
-test_all_with_empty_registry_warns_and_succeeds() {
+test_all_selects_every_registered_component() {
     local out rc=0
-    out=$(run_bs --all) || rc=$?
+    out=$(run_bs --all --dry-run) || rc=$?
     assert_eq "$rc" "0"
-    assert_contains "$out" "[ WARN ] --all: no components registered yet."
+    assert_contains "$out" "$(printf '  %-13s: %s' Components system)"
+    assert_not_contains "$out" "no components registered"
 }
 
-test_minimal_with_empty_registry_warns_and_succeeds() {
+test_minimal_selects_essential_components() {
     local out rc=0
-    out=$(run_bs --minimal) || rc=$?
+    out=$(run_bs --minimal --dry-run) || rc=$?
     assert_eq "$rc" "0"
-    assert_contains "$out" "[ WARN ] --minimal: no components registered yet."
+    assert_contains "$out" "$(printf '  %-13s: %s' Components system)"
+}
+
+test_modules_flag_selects_named_component() {
+    local out rc=0
+    out=$(run_bs --modules system --dry-run) || rc=$?
+    assert_eq "$rc" "0"
+    assert_contains "$out" "$(printf '  %-13s: %s' Components system)"
+    assert_contains "$out" "[ DRY  ] system: verification skipped in dry run"
 }
 
 test_interactive_flag_notes_stage8() {
     local out rc=0
-    out=$(run_bs --interactive) || rc=$?
+    out=$(run_bs --interactive --dry-run) || rc=$?
     assert_eq "$rc" "0"
     assert_contains "$out" "Interactive menu is not available yet"
 }
@@ -140,11 +150,11 @@ t_run \
     test_list_shows_environment_and_config \
     test_cli_beats_environment \
     test_environment_beats_config_file \
-    test_dry_run_prints_plan_and_changes_nothing \
-    test_real_run_validates_without_changes \
-    test_modules_without_registry_exits_2 \
-    test_all_with_empty_registry_warns_and_succeeds \
-    test_minimal_with_empty_registry_warns_and_succeeds \
+    test_dry_run_shows_plan_and_changes_nothing \
+    test_unknown_module_exits_2 \
+    test_all_selects_every_registered_component \
+    test_minimal_selects_essential_components \
+    test_modules_flag_selects_named_component \
     test_interactive_flag_notes_stage8 \
     test_log_file_is_created
 
