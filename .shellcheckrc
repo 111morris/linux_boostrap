@@ -1,0 +1,8 @@
+# Project-wide ShellCheck configuration
+shell=bash
+source-path=SCRIPTDIR
+external-sources=true
+
+# SC2329: test functions are invoked dynamically by t_run (by name).
+# SC2030/SC2031: subshell-local variables are intentional in test probes.
+disable=SC2329,SC2030,SC2031

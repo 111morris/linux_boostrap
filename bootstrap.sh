@@ -1,572 +1,326 @@
 #!/usr/bin/env bash
+#
+# linux-bootstrap — cross-distribution Linux workstation provisioning.
+#
+# Stage 1 (current): core infrastructure — OS/package-manager detection,
+# logical package-name abstraction, configuration with explicit precedence,
+# full CLI, dry-run machinery and logging. Component modules arrive in
+# later stages (see README "Roadmap").
+#
+# Run:  ./bootstrap.sh --help
 
 set -Eeuo pipefail
 
-# ============================================================
-# Linux Bootstrap Script
-# Supports:
-#   - Debian / Ubuntu
-#   - Fedora / RHEL
-#   - Arch
-#   - openSUSE
-#   - Alpine
-#
-# Run:
-#   chmod +x bootstrap.sh
-#   ./bootstrap.sh
-# ============================================================
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+BOOTSTRAP_VERSION="0.1.0"
 
-SCRIPT_NAME="$(basename "$0")"
+# shellcheck source=lib/common.sh
+source "$SCRIPT_DIR/lib/common.sh"
+# shellcheck source=lib/os.sh
+source "$SCRIPT_DIR/lib/os.sh"
+# shellcheck source=lib/pkg.sh
+source "$SCRIPT_DIR/lib/pkg.sh"
+# shellcheck source=lib/config.sh
+source "$SCRIPT_DIR/lib/config.sh"
 
-# ------------------------------------------------------------
-# Colors
-# ------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Component registry — entries are "name:tier".
+# Tiers: essential | runtime | optional | apps
+# Populated stage by stage; Stage 2 adds "system".
+# ---------------------------------------------------------------------------
+MODULE_REGISTRY=()
 
-RED='\033[0;31m'
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-BLUE='\033[0;34m'
-NC='\033[0m'
+SELECTED_MODULES=()
 
-log() {
-    echo -e "${BLUE}[$SCRIPT_NAME]${NC} $1"
+# ---------------------------------------------------------------------------
+# CLI
+# ---------------------------------------------------------------------------
+
+usage() {
+    cat <<EOF
+linux-bootstrap ${BOOTSTRAP_VERSION} — cross-distribution workstation provisioning
+
+Usage: ./bootstrap.sh [OPTIONS]
+
+Options:
+  -h, --help              Show this help and exit
+  -V, --version           Print the version and exit
+  -n, --dry-run           Show planned actions without changing the system
+      --non-interactive   Never prompt; use configuration defaults
+      --interactive       Request the component menu (available in Stage 8)
+      --all               Enable every registered component
+      --minimal           Enable only essential components
+      --skip-update       Skip metadata refresh / upgrade (UPDATE_SYSTEM=false)
+      --modules LIST      Enable only the comma-separated components (see --list)
+      --list              Show environment, components and effective configuration
+
+Configuration precedence:
+  built-in defaults  <  config/*.conf  <  environment  <  command line
+
+Examples:
+  ./bootstrap.sh --dry-run
+  ./bootstrap.sh --non-interactive --all
+  ./bootstrap.sh --modules system,git --skip-update
+  ./bootstrap.sh --list
+EOF
 }
 
-success() {
-    echo -e "${GREEN}[OK]${NC} $1"
+usage_error() {
+    log_fail "$1"
+    printf 'Try "./bootstrap.sh --help" for more information.\n'
+    exit 2
 }
 
-warn() {
-    echo -e "${YELLOW}[WARN]${NC} $1"
+parse_args() {
+    DRY_RUN=false
+    INTERACTIVE='auto'
+    MODE='default'
+    MODULES_ARG=''
+    LIST_ONLY=false
+    FLAG_SKIP_UPDATE=false
+
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -h | --help)
+                usage
+                exit 0
+                ;;
+            -V | --version)
+                printf 'linux-bootstrap %s\n' "$BOOTSTRAP_VERSION"
+                exit 0
+                ;;
+            -n | --dry-run)
+                DRY_RUN=true
+                ;;
+            --non-interactive)
+                INTERACTIVE='off'
+                ;;
+            --interactive)
+                INTERACTIVE='on'
+                ;;
+            --all)
+                MODE='all'
+                ;;
+            --minimal)
+                MODE='minimal'
+                ;;
+            --skip-update)
+                FLAG_SKIP_UPDATE=true
+                ;;
+            --modules)
+                shift
+                [[ $# -gt 0 ]] || usage_error "--modules requires a comma-separated value"
+                MODULES_ARG=$1
+                ;;
+            --modules=*)
+                MODULES_ARG=${1#--modules=}
+                [[ -n $MODULES_ARG ]] || usage_error "--modules requires a comma-separated value"
+                ;;
+            --list)
+                LIST_ONLY=true
+                ;;
+            --)
+                shift
+                [[ $# -eq 0 ]] || usage_error "Unexpected arguments after --: $*"
+                break
+                ;;
+            -*)
+                usage_error "Unknown option: $1"
+                ;;
+            *)
+                usage_error "Unexpected argument: $1"
+                ;;
+        esac
+        shift
+    done
 }
 
-error() {
-    echo -e "${RED}[ERROR]${NC} $1"
+# ---------------------------------------------------------------------------
+# Component selection (--modules > --all > --minimal > config defaults)
+# ---------------------------------------------------------------------------
+
+module_registry_names() {
+    local entry
+    for entry in "${MODULE_REGISTRY[@]}"; do
+        printf '%s\n' "${entry%%:*}"
+    done
 }
 
-# ------------------------------------------------------------
-# Check root/sudo
-# ------------------------------------------------------------
+compute_selection() {
+    SELECTED_MODULES=()
 
-if [[ "$EUID" -eq 0 ]]; then
-    SUDO=""
-else
-    if command -v sudo >/dev/null 2>&1; then
-        SUDO="sudo"
-    else
-        error "sudo is not installed."
-        error "Please install sudo or run this script as root."
-        exit 1
-    fi
-fi
-
-# ------------------------------------------------------------
-# Detect Linux distribution
-# ------------------------------------------------------------
-
-if [[ ! -f /etc/os-release ]]; then
-    error "Cannot determine Linux distribution."
-    exit 1
-fi
-
-source /etc/os-release
-
-DISTRO="${ID}"
-VERSION="${VERSION_ID:-unknown}"
-
-log "Detected distribution: ${PRETTY_NAME}"
-
-# ------------------------------------------------------------
-# Package manager detection
-# ------------------------------------------------------------
-
-PACKAGE_MANAGER=""
-
-case "$DISTRO" in
-    ubuntu|debian|linuxmint|pop)
-        PACKAGE_MANAGER="apt"
-        ;;
-
-    fedora|rhel|centos|rocky|almalinux)
-        PACKAGE_MANAGER="dnf"
-        ;;
-
-    arch|manjaro)
-        PACKAGE_MANAGER="pacman"
-        ;;
-
-    opensuse*|sles)
-        PACKAGE_MANAGER="zypper"
-        ;;
-
-    alpine)
-        PACKAGE_MANAGER="apk"
-        ;;
-
-    *)
-        # Fallback based on available commands
-        if command -v apt-get >/dev/null 2>&1; then
-            PACKAGE_MANAGER="apt"
-        elif command -v dnf >/dev/null 2>&1; then
-            PACKAGE_MANAGER="dnf"
-        elif command -v pacman >/dev/null 2>&1; then
-            PACKAGE_MANAGER="pacman"
-        elif command -v zypper >/dev/null 2>&1; then
-            PACKAGE_MANAGER="zypper"
-        elif command -v apk >/dev/null 2>&1; then
-            PACKAGE_MANAGER="apk"
-        else
-            error "Unsupported Linux distribution."
-            exit 1
+    if [[ -n $MODULES_ARG ]]; then
+        if [[ ${#MODULE_REGISTRY[@]} -eq 0 ]]; then
+            usage_error "No components are registered yet (Stage 1 infrastructure only)."
         fi
-        ;;
-esac
+        local -a requested=()
+        IFS=',' read -r -a requested <<<"$MODULES_ARG"
+        local req
+        for req in "${requested[@]}"; do
+            req=${req//[[:space:]]/}
+            [[ -n $req ]] || continue
+            if ! module_registry_names | grep -qx "$req"; then
+                usage_error "Unknown component: ${req} (see --list)"
+            fi
+            SELECTED_MODULES+=("$req")
+        done
+        return 0
+    fi
 
-success "Package manager: ${PACKAGE_MANAGER}"
-
-# ------------------------------------------------------------
-# Update system
-# ------------------------------------------------------------
-
-update_system() {
-
-    log "Updating system..."
-
-    case "$PACKAGE_MANAGER" in
-
-        apt)
-            $SUDO apt-get update
-            $SUDO apt-get upgrade -y
+    local entry
+    case "$MODE" in
+        all)
+            if [[ ${#MODULE_REGISTRY[@]} -eq 0 ]]; then
+                log_warn "--all: no components registered yet."
+            else
+                for entry in "${MODULE_REGISTRY[@]}"; do
+                    SELECTED_MODULES+=("${entry%%:*}")
+                done
+            fi
             ;;
-
-        dnf)
-            $SUDO dnf upgrade --refresh -y
+        minimal)
+            if [[ ${#MODULE_REGISTRY[@]} -eq 0 ]]; then
+                log_warn "--minimal: no components registered yet."
+            else
+                for entry in "${MODULE_REGISTRY[@]}"; do
+                    if [[ ${entry##*:} == essential ]]; then
+                        SELECTED_MODULES+=("${entry%%:*}")
+                    fi
+                done
+            fi
             ;;
-
-        pacman)
-            $SUDO pacman -Syu --noconfirm
+        *)
+            # Default mode: each component opts in through its own
+            # configuration flag when it lands (Stage 2+).
+            :
             ;;
-
-        zypper)
-            $SUDO zypper refresh
-            $SUDO zypper update -y
-            ;;
-
-        apk)
-            $SUDO apk update
-            $SUDO apk upgrade
-            ;;
-
     esac
-
-    success "System updated."
 }
 
-# ------------------------------------------------------------
-# Install packages
-# ------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Output
+# ---------------------------------------------------------------------------
 
-install_packages() {
-
-    log "Installing common packages..."
-
-    case "$PACKAGE_MANAGER" in
-
-        apt)
-
-            PACKAGES=(
-                git
-                curl
-                wget
-                unzip
-                zip
-                tar
-                gzip
-                bzip2
-                xz-utils
-
-                ca-certificates
-                gnupg
-
-                build-essential
-
-                python3
-                python3-pip
-                python3-venv
-
-                nodejs
-                npm
-
-                openssh-client
-
-                tmux
-                htop
-                tree
-                jq
-                ripgrep
-                fd-find
-
-                vim
-            )
-
-            $SUDO apt-get install -y "${PACKAGES[@]}"
-            ;;
-
-        dnf)
-
-            PACKAGES=(
-                git
-                curl
-                wget
-                unzip
-                zip
-                tar
-                gzip
-                bzip2
-                xz
-
-                ca-certificates
-
-                gcc
-                gcc-c++
-                make
-
-                python3
-                python3-pip
-
-                nodejs
-                npm
-
-                openssh-clients
-
-                tmux
-                htop
-                tree
-                jq
-                ripgrep
-                fd-find
-
-                vim
-            )
-
-            $SUDO dnf install -y "${PACKAGES[@]}"
-            ;;
-
-        pacman)
-
-            PACKAGES=(
-                git
-                curl
-                wget
-                unzip
-                zip
-                tar
-
-                base-devel
-
-                python
-                python-pip
-
-                nodejs
-                npm
-
-                openssh
-
-                tmux
-                htop
-                tree
-                jq
-                ripgrep
-                fd
-
-                vim
-            )
-
-            $SUDO pacman -S --needed --noconfirm "${PACKAGES[@]}"
-            ;;
-
-        zypper)
-
-            PACKAGES=(
-                git
-                curl
-                wget
-                unzip
-                zip
-                tar
-
-                gcc
-                gcc-c++
-                make
-
-                python3
-                python3-pip
-
-                nodejs
-                npm
-
-                openssh-clients
-
-                tmux
-                htop
-                tree
-                jq
-                ripgrep
-
-                vim
-            )
-
-            $SUDO zypper install -y "${PACKAGES[@]}"
-            ;;
-
-        apk)
-
-            PACKAGES=(
-                git
-                curl
-                wget
-                unzip
-                zip
-                tar
-
-                build-base
-
-                python3
-                py3-pip
-
-                nodejs
-                npm
-
-                openssh
-
-                tmux
-                htop
-                tree
-                jq
-                ripgrep
-
-                vim
-            )
-
-            $SUDO apk add "${PACKAGES[@]}"
-            ;;
-
-    esac
-
-    success "Common packages installed."
+print_system_block() {
+    section_header "System"
+    kv_print "Distribution" "$OS_PRETTY"
+    kv_print "Version" "${OS_VERSION_ID:-unknown}"
+    kv_print "Family" "$OS_FAMILY"
+    kv_print "Architecture" "$OS_ARCH"
+    kv_print "Package mgr" "${PKG_MANAGER} (${PKG_CMD})"
+    kv_print "Privileges" "${PRIVILEGE_MODE}"
 }
 
-# ------------------------------------------------------------
-# Git configuration
-# ------------------------------------------------------------
+print_list() {
+    print_system_block
 
-configure_git() {
-
-    log "Configuring Git..."
-
-    # Change these values to your own.
-    GIT_NAME="${GIT_NAME:-Your Name}"
-    GIT_EMAIL="${GIT_EMAIL:-you@example.com}"
-
-    git config --global user.name "$GIT_NAME"
-    git config --global user.email "$GIT_EMAIL"
-
-    git config --global init.defaultBranch main
-
-    git config --global pull.rebase false
-
-    git config --global core.editor vim
-
-    git config --global color.ui auto
-
-    success "Git configured."
-}
-
-# ------------------------------------------------------------
-# Python configuration
-# ------------------------------------------------------------
-
-configure_python() {
-
-    log "Checking Python..."
-
-    if command -v python3 >/dev/null 2>&1; then
-
-        PYTHON_VERSION=$(python3 --version)
-
-        success "Python found: $PYTHON_VERSION"
-
+    section_header "Components"
+    if [[ ${#MODULE_REGISTRY[@]} -eq 0 ]]; then
+        printf '  (none registered yet — the "system" component arrives in Stage 2)\n'
     else
-
-        warn "Python 3 was not found."
-    fi
-}
-
-# ------------------------------------------------------------
-# Node configuration
-# ------------------------------------------------------------
-
-configure_node() {
-
-    log "Checking Node.js..."
-
-    if command -v node >/dev/null 2>&1; then
-
-        NODE_VERSION=$(node --version)
-
-        success "Node.js found: $NODE_VERSION"
-
-    else
-
-        warn "Node.js was not found."
+        local entry
+        for entry in "${MODULE_REGISTRY[@]}"; do
+            printf '  %-14s %s\n' "${entry%%:*}" "${entry##*:}"
+        done
     fi
 
-    if command -v npm >/dev/null 2>&1; then
+    section_header "Effective configuration"
+    local name
+    while IFS= read -r name; do
+        cfg_print "$name" "$(config_get "$name")"
+    done < <(config_keys)
 
-        NPM_VERSION=$(npm --version)
-
-        success "npm found: $NPM_VERSION"
-
-    else
-
-        warn "npm was not found."
-    fi
+    section_header "Notes"
+    kv_print "Precedence" "defaults < config files < environment < CLI"
+    kv_print "Log file" "${LOG_FILE:-console only}"
 }
 
-# ------------------------------------------------------------
-# Optional applications
-# ------------------------------------------------------------
-
-install_optional_software() {
-
-    log "Installing optional software..."
-
-    # --------------------------------------------------------
-    # Add your software here.
-    #
-    # IMPORTANT:
-    # Keep packages that exist in your distro repositories here.
-    #
-    # Examples:
-    #
-    # Docker
-    # PostgreSQL
-    # Redis
-    # Neovim
-    # Python tools
-    # etc.
-    # --------------------------------------------------------
-
-    OPTIONAL_PACKAGES=(
-        # neovim
-        # docker
-        # docker-compose
-        # postgresql
-        # redis
-    )
-
-    if [[ ${#OPTIONAL_PACKAGES[@]} -eq 0 ]]; then
-        warn "No optional packages configured."
-        return
-    fi
-
-    case "$PACKAGE_MANAGER" in
-
-        apt)
-            $SUDO apt-get install -y "${OPTIONAL_PACKAGES[@]}"
-            ;;
-
-        dnf)
-            $SUDO dnf install -y "${OPTIONAL_PACKAGES[@]}"
-            ;;
-
-        pacman)
-            $SUDO pacman -S --needed --noconfirm "${OPTIONAL_PACKAGES[@]}"
-            ;;
-
-        zypper)
-            $SUDO zypper install -y "${OPTIONAL_PACKAGES[@]}"
-            ;;
-
-        apk)
-            $SUDO apk add "${OPTIONAL_PACKAGES[@]}"
-            ;;
-
-    esac
-
-    success "Optional software installed."
+print_plan() {
+    section_header "Plan (dry run)"
+    log_dry "Read-only so far: OS detection, package-manager detection, privilege check, configuration validation"
+    log_dry "No mutating actions exist yet — component actions (metadata refresh, upgrades, installs) arrive in Stage 2"
 }
-
-# ------------------------------------------------------------
-# Shell configuration
-# ------------------------------------------------------------
-
-configure_shell() {
-
-    log "Configuring shell..."
-
-    SHELL_NAME="$(basename "${SHELL:-bash}")"
-
-    log "Current shell: $SHELL_NAME"
-
-    # Put aliases/environment configuration here later.
-
-    success "Shell configuration complete."
-}
-
-# ------------------------------------------------------------
-# Summary
-# ------------------------------------------------------------
 
 print_summary() {
+    local sel='(none)'
+    if [[ ${#SELECTED_MODULES[@]} -gt 0 ]]; then
+        sel=$(
+            IFS=,
+            printf '%s' "${SELECTED_MODULES[*]}"
+        )
+    fi
 
-    echo
-    echo "============================================================"
-    echo " Linux Bootstrap Complete"
-    echo "============================================================"
-    echo
-    echo "Distribution : $PRETTY_NAME"
-    echo "Package mgr  : $PACKAGE_MANAGER"
-    echo
-    echo "Installed / checked:"
-    echo "  Git"
-    echo "  Python 3"
-    echo "  Node.js"
-    echo "  npm"
-    echo "  Build tools"
-    echo "  SSH"
-    echo "  curl / wget"
-    echo "  tmux"
-    echo "  vim"
-    echo "  jq"
-    echo "  ripgrep"
-    echo "  tree"
-    echo
-    echo "============================================================"
+    section_header "Summary"
+    kv_print "Components" "$sel"
+    kv_print "Config" "${CONFIG_DIR:-$SCRIPT_DIR/config} ($(config_key_count) keys)"
+    kv_print "Log file" "${LOG_FILE:-console only}"
 }
 
-# ------------------------------------------------------------
+# ---------------------------------------------------------------------------
 # Main
-# ------------------------------------------------------------
+# ---------------------------------------------------------------------------
 
 main() {
+    parse_args "$@"
 
-    update_system
+    print_rule
+    printf ' linux-bootstrap %s\n' "$BOOTSTRAP_VERSION"
+    print_rule
 
-    install_packages
+    logging_init
+    install_error_trap
 
-    configure_git
+    log_info "Loading configuration"
+    config_load
 
-    configure_python
+    if [[ $FLAG_SKIP_UPDATE == true ]]; then
+        UPDATE_SYSTEM=false
+        log_info "--skip-update: UPDATE_SYSTEM=false"
+    fi
 
-    configure_node
+    compute_selection
 
-    install_optional_software
+    log_info "Detecting operating system"
+    detect_os
+    log_ok "${OS_PRETTY} (${OS_ARCH})"
 
-    configure_shell
+    init_privileges
+
+    log_info "Detecting package manager"
+    pkg_detect
+    log_ok "${PKG_MANAGER} (via ${PKG_CMD})"
+
+    if [[ $LIST_ONLY == true ]]; then
+        print_list
+        exit 0
+    fi
+
+    case "$INTERACTIVE" in
+        on)
+            log_warn "Interactive menu is not available yet (planned for Stage 8); continuing with the selected components."
+            ;;
+        auto)
+            if [[ -t 0 ]]; then
+                log_info "Interactive menu is not available yet (Stage 8); using configuration defaults."
+            fi
+            ;;
+    esac
+
+    print_system_block
+
+    if is_truthy "$DRY_RUN"; then
+        print_plan
+    elif [[ ${#SELECTED_MODULES[@]} -eq 0 ]]; then
+        log_info "Core infrastructure validated (read-only). No components registered yet — Stage 2 adds 'system'."
+    fi
 
     print_summary
+
+    if is_truthy "$DRY_RUN"; then
+        log_ok "Dry run complete — no changes were made"
+    else
+        log_ok "Environment validated — no system changes made yet (components arrive in Stage 2)"
+    fi
 }
 
 main "$@"
-
