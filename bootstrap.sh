@@ -31,6 +31,8 @@ source "$SCRIPT_DIR/lib/config.sh"
 # ---------------------------------------------------------------------------
 MODULE_REGISTRY=(
     'system:essential'
+    'git:essential'
+    'ssh:essential'
 )
 
 SELECTED_MODULES=()

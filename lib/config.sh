@@ -18,6 +18,18 @@
 CONFIG_KEYS=(
     'UPDATE_SYSTEM:boolean'
     'BASELINE_PACKAGES:string'
+    'INSTALL_GIT:boolean'
+    'GIT_USER_NAME:string'
+    'GIT_USER_EMAIL:string'
+    'GIT_DEFAULT_BRANCH:string'
+    'GIT_EDITOR:string'
+    'GIT_PULL_REBASE:string'
+    'GIT_COLOR_UI:string'
+    'INSTALL_SSH:boolean'
+    'SSH_KEY_TYPE:string'
+    'SSH_KEY_BITS:string'
+    'SSH_KEY_COMMENT:string'
+    'SSH_GENERATE_KEY:boolean'
     'INSTALL_DOCKER:boolean'
     'INSTALL_NEOVIM:boolean'
     'INSTALL_RUST:boolean'
@@ -88,6 +100,18 @@ config_load() {
     # 2. built-in defaults
     UPDATE_SYSTEM=true
     BASELINE_PACKAGES='git curl wget ca-certificates unzip zip tar gzip xz ssh-client build-essential make cc jq tree tmux htop ripgrep fd findutils vim'
+    INSTALL_GIT=true
+    GIT_USER_NAME=''
+    GIT_USER_EMAIL=''
+    GIT_DEFAULT_BRANCH='main'
+    GIT_EDITOR=''
+    GIT_PULL_REBASE='true'
+    GIT_COLOR_UI='true'
+    INSTALL_SSH=true
+    SSH_KEY_TYPE='ed25519'
+    SSH_KEY_BITS=''
+    SSH_KEY_COMMENT=''
+    SSH_GENERATE_KEY=false
     INSTALL_DOCKER=false
     INSTALL_NEOVIM=false
     INSTALL_RUST=false

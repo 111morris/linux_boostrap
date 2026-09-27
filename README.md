@@ -3,10 +3,10 @@
 Cross-distribution Linux workstation provisioning: clone the repository on a
 fresh install, run one command, get a machine that is ready for development.
 
-**Status: Stage 2 of a staged build** (see [Roadmap](#roadmap)). Stage 2 adds
-the first component — `system`: package metadata refresh, a configurable full
-upgrade (`UPDATE_SYSTEM`), and the baseline development packages
-(`BASELINE_PACKAGES`) — all idempotent and dry-run aware.
+**Status: Stage 4 of a staged build** (see [Roadmap](#roadmap)). Stage 4 adds
+the `git` and `ssh` components: git installation with non-destructive user
+configuration, and SSH client installation with opt-in key generation that
+never overwrites existing keys.
 
 ## Supported distributions
 
@@ -71,11 +71,19 @@ runner validates the contract when it loads the file. Selection precedence:
 | Component | Tier      | Configuration keys                   | Status  |
 |-----------|-----------|--------------------------------------|---------|
 | system    | essential | `UPDATE_SYSTEM`, `BASELINE_PACKAGES` | shipped |
+| git       | essential | `INSTALL_GIT`, `GIT_USER_NAME`, `GIT_USER_EMAIL`, `GIT_DEFAULT_BRANCH`, `GIT_EDITOR`, `GIT_PULL_REBASE`, `GIT_COLOR_UI` | shipped |
+| ssh       | essential | `INSTALL_SSH`, `SSH_KEY_TYPE`, `SSH_KEY_BITS`, `SSH_KEY_COMMENT`, `SSH_GENERATE_KEY` | shipped |
 
 The system component refreshes package metadata, runs a full upgrade when
 `UPDATE_SYSTEM=true`, and installs whatever is missing from
 `BASELINE_PACKAGES` — logical names, resolved per distribution. Re-running it
 only repeats the refresh/upgrade; the baseline step skips when complete.
+
+The git component installs git when missing and applies user settings from
+`config/git.conf` — only non-empty values are set, and existing configuration
+is never overwritten. The ssh component installs the SSH client when missing
+and can optionally generate a key pair (`SSH_GENERATE_KEY=true`); it never
+overwrites an existing private key and always ensures proper permissions.
 
 ## Configuration
 
@@ -136,9 +144,9 @@ make test     # tests/run_tests.sh — plain bash, no test framework needed
 | Stage | Content                                          | Status |
 |-------|--------------------------------------------------|--------|
 | 1     | Core infra: detection, pkg abstraction, config, CLI, dry-run, logging | done |
-| 2     | System component: metadata refresh, upgrade, baseline packages | **current** |
-| 3     | Complete `config/*` (git/python/node/system)      | pending |
-| 4     | Git + SSH components (non-destructive, opt-in)    | pending |
+| 2     | System component: metadata refresh, upgrade, baseline packages | done |
+| 3     | Complete `config/*` (git/python/node/system)      | done |
+| 4     | Git + SSH components (non-destructive, opt-in)    | **current** |
 | 5     | Python + Node runtimes (never replace system)     | pending |
 | 6     | Optional runtimes: Rust, Go, Docker               | pending |
 | 7     | Applications component (native → flatpak → vendor)| pending |

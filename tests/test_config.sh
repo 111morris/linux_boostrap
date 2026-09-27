@@ -31,7 +31,7 @@ test_defaults_when_config_dir_missing() {
     assert_contains "$out" "[ WARN ] Configuration directory not found"
     assert_contains "$out" "RESULT update=true docker=false rust=false"
     assert_contains "$out" "baseline=git curl wget"
-    assert_contains "$out" "COUNT 9"
+    assert_contains "$out" "COUNT 21"
 }
 
 test_config_files_override_defaults() {
