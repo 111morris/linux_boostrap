@@ -3,10 +3,10 @@
 Cross-distribution Linux workstation provisioning: clone the repository on a
 fresh install, run one command, get a machine that is ready for development.
 
-**Status: Stage 4 of a staged build** (see [Roadmap](#roadmap)). Stage 4 adds
-the `git` and `ssh` components: git installation with non-destructive user
-configuration, and SSH client installation with opt-in key generation that
-never overwrites existing keys.
+**Status: Stage 5 of a staged build** (see [Roadmap](#roadmap)). Stage 5 adds
+the `python` and `node` developer-runtime components: Python 3 + pip + venv
+and Node.js + npm, installed via distribution packages without replacing
+system interpreters.
 
 ## Supported distributions
 
@@ -73,6 +73,8 @@ runner validates the contract when it loads the file. Selection precedence:
 | system    | essential | `UPDATE_SYSTEM`, `BASELINE_PACKAGES` | shipped |
 | git       | essential | `INSTALL_GIT`, `GIT_USER_NAME`, `GIT_USER_EMAIL`, `GIT_DEFAULT_BRANCH`, `GIT_EDITOR`, `GIT_PULL_REBASE`, `GIT_COLOR_UI` | shipped |
 | ssh       | essential | `INSTALL_SSH`, `SSH_KEY_TYPE`, `SSH_KEY_BITS`, `SSH_KEY_COMMENT`, `SSH_GENERATE_KEY` | shipped |
+| python    | runtime   | `INSTALL_PYTHON_TOOLS`, `PYTHON_VERSION` | shipped |
+| node      | runtime   | `INSTALL_NODE_TOOLS`, `NODE_VERSION` | shipped |
 
 The system component refreshes package metadata, runs a full upgrade when
 `UPDATE_SYSTEM=true`, and installs whatever is missing from
@@ -146,8 +148,8 @@ make test     # tests/run_tests.sh — plain bash, no test framework needed
 | 1     | Core infra: detection, pkg abstraction, config, CLI, dry-run, logging | done |
 | 2     | System component: metadata refresh, upgrade, baseline packages | done |
 | 3     | Complete `config/*` (git/python/node/system)      | done |
-| 4     | Git + SSH components (non-destructive, opt-in)    | **current** |
-| 5     | Python + Node runtimes (never replace system)     | pending |
+| 4     | Git + SSH components (non-destructive, opt-in)    | done |
+| 5     | Python + Node runtimes (never replace system)     | done |
 | 6     | Optional runtimes: Rust, Go, Docker               | pending |
 | 7     | Applications component (native → flatpak → vendor)| pending |
 | 8     | Interactive menu + `--all` / `--minimal`          | pending |

@@ -33,6 +33,8 @@ MODULE_REGISTRY=(
     'system:essential'
     'git:essential'
     'ssh:essential'
+    'python:runtime'
+    'node:runtime'
 )
 
 SELECTED_MODULES=()
