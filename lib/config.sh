@@ -35,7 +35,9 @@ CONFIG_KEYS=(
     'INSTALL_RUST:boolean'
     'INSTALL_GO:boolean'
     'INSTALL_PYTHON_TOOLS:boolean'
+    'PYTHON_VERSION:string'
     'INSTALL_NODE_TOOLS:boolean'
+    'NODE_VERSION:string'
     'INSTALL_DATABASES:boolean'
 )
 
@@ -117,7 +119,9 @@ config_load() {
     INSTALL_RUST=false
     INSTALL_GO=false
     INSTALL_PYTHON_TOOLS=true
+    PYTHON_VERSION=''
     INSTALL_NODE_TOOLS=true
+    NODE_VERSION=''
     INSTALL_DATABASES=false
 
     if [[ ! -d $conf_dir ]]; then

@@ -3,10 +3,10 @@
 Cross-distribution Linux workstation provisioning: clone the repository on a
 fresh install, run one command, get a machine that is ready for development.
 
-**Status: Stage 5 of a staged build** (see [Roadmap](#roadmap)). Stage 5 adds
-the `python` and `node` developer-runtime components: Python 3 + pip + venv
-and Node.js + npm, installed via distribution packages without replacing
-system interpreters.
+**Status: Stage 6 of a staged build** (see [Roadmap](#roadmap)). Stage 6 adds
+the `rust`, `go`, and `docker` components: Rust (rustc + cargo), Go, and
+Docker, all installed via distribution packages without replacing system
+installations.
 
 ## Supported distributions
 
@@ -75,6 +75,9 @@ runner validates the contract when it loads the file. Selection precedence:
 | ssh       | essential | `INSTALL_SSH`, `SSH_KEY_TYPE`, `SSH_KEY_BITS`, `SSH_KEY_COMMENT`, `SSH_GENERATE_KEY` | shipped |
 | python    | runtime   | `INSTALL_PYTHON_TOOLS`, `PYTHON_VERSION` | shipped |
 | node      | runtime   | `INSTALL_NODE_TOOLS`, `NODE_VERSION` | shipped |
+| rust      | optional  | `INSTALL_RUST` | shipped |
+| go        | optional  | `INSTALL_GO` | shipped |
+| docker    | apps      | `INSTALL_DOCKER` | shipped |
 
 The system component refreshes package metadata, runs a full upgrade when
 `UPDATE_SYSTEM=true`, and installs whatever is missing from
@@ -150,7 +153,7 @@ make test     # tests/run_tests.sh — plain bash, no test framework needed
 | 3     | Complete `config/*` (git/python/node/system)      | done |
 | 4     | Git + SSH components (non-destructive, opt-in)    | done |
 | 5     | Python + Node runtimes (never replace system)     | done |
-| 6     | Optional runtimes: Rust, Go, Docker               | pending |
+| 6     | Optional runtimes: Rust, Go, Docker               | done |
 | 7     | Applications component (native → flatpak → vendor)| pending |
 | 8     | Interactive menu + `--all` / `--minimal`          | pending |
 | 9     | Verification, summary, persistent log polish      | pending |

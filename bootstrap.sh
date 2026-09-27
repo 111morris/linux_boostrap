@@ -35,6 +35,9 @@ MODULE_REGISTRY=(
     'ssh:essential'
     'python:runtime'
     'node:runtime'
+    'rust:optional'
+    'go:optional'
+    'docker:apps'
 )
 
 SELECTED_MODULES=()

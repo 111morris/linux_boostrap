@@ -21,4 +21,8 @@ declare -gA PKG_MAP=(
     ['fd']='fd'
     ['gpg']='gnupg'
     ['node']='nodejs'
+    ['rustc']='rust'
+    ['cargo']='cargo'
+    ['go']='go'
+    ['docker']='docker'
 )
